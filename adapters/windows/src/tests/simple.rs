@@ -287,6 +287,9 @@ fn splitter_range_value() -> Result<()> {
                 request.data,
                 Some(accesskit::ActionData::NumericValue(value)) if value == 0.65
             ));
+            let error = unsafe { read_only_range.SetValue(0.65) }.unwrap_err();
+            assert_eq!(error.code(), HRESULT(UIA_E_INVALIDOPERATION as i32));
+
             Ok(())
         },
     )
