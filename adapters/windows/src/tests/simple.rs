@@ -196,3 +196,98 @@ fn focus() -> Result<()> {
         Ok(())
     })
 }
+
+struct SplitterActivationHandler;
+
+impl ActivationHandler for SplitterActivationHandler {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        let mut root = Node::new(Role::Window);
+        root.set_children(vec![NodeId(1), NodeId(2)]);
+        let mut splitter = Node::new(Role::Splitter);
+        splitter.set_label("Writable splitter");
+        splitter.set_numeric_value(0.5);
+        splitter.set_min_numeric_value(0.1);
+        splitter.set_max_numeric_value(0.9);
+        splitter.set_numeric_value_step(0.05);
+        splitter.set_numeric_value_jump(0.1);
+        splitter.add_action(Action::Focus);
+        splitter.add_action(Action::SetValue);
+        let mut read_only = splitter.clone();
+        read_only.set_label("Read-only splitter");
+        read_only.set_read_only();
+        Some(TreeUpdate {
+            nodes: vec![
+                (WINDOW_ID, root),
+                (NodeId(1), splitter),
+                (NodeId(2), read_only),
+            ],
+            tree: Some(TreeInfo::new(WINDOW_ID)),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        })
+    }
+}
+
+struct SplitterActionHandler(std::sync::mpsc::Sender<ActionRequest>);
+
+impl ActionHandler for SplitterActionHandler {
+    fn do_action(&mut self, request: ActionRequest) {
+        self.0.send(request).unwrap();
+    }
+}
+
+#[test]
+fn splitter_range_value() -> Result<()> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    super::scope(
+        "Splitter test",
+        SplitterActivationHandler,
+        SplitterActionHandler(sender),
+        |s| {
+            let root = unsafe { s.uia.ElementFromHandle(s.window.0) }?;
+            let walker = unsafe { s.uia.RawViewWalker() }?;
+            let mut writable = None;
+            let mut read_only = None;
+            let mut next = unsafe { walker.GetFirstChildElement(&root) };
+            while let Ok(child) = next {
+                let name = unsafe { child.CurrentName() }?.to_string();
+                match name.as_str() {
+                    "Writable splitter" => writable = Some(child.clone()),
+                    "Read-only splitter" => read_only = Some(child.clone()),
+                    _ => {}
+                }
+                next = unsafe { walker.GetNextSiblingElement(&child) };
+            }
+            let writable = writable.expect("writable splitter");
+            let read_only = read_only.expect("read-only splitter");
+            assert_eq!(
+                unsafe { writable.CurrentControlType() }?,
+                UIA_SeparatorControlTypeId
+            );
+            let range: IUIAutomationRangeValuePattern =
+                unsafe { writable.GetCurrentPatternAs(UIA_RangeValuePatternId) }?;
+            let read_only_range: IUIAutomationRangeValuePattern =
+                unsafe { read_only.GetCurrentPatternAs(UIA_RangeValuePatternId) }?;
+            assert!(!unsafe { range.CurrentIsReadOnly() }?.as_bool());
+            assert!(unsafe { read_only_range.CurrentIsReadOnly() }?.as_bool());
+            assert_eq!(unsafe { range.CurrentValue() }?, 0.5);
+            assert_eq!(unsafe { range.CurrentMinimum() }?, 0.1);
+            assert_eq!(unsafe { range.CurrentMaximum() }?, 0.9);
+            assert_eq!(unsafe { range.CurrentSmallChange() }?, 0.05);
+            assert_eq!(unsafe { range.CurrentLargeChange() }?, 0.1);
+
+            unsafe { range.SetValue(0.65) }?;
+            let request = receiver
+                .recv_timeout(super::DEFAULT_TIMEOUT)
+                .expect("SetValue action");
+            assert_eq!(request.action, Action::SetValue);
+            assert_eq!(request.target_tree, TreeId::ROOT);
+            assert_eq!(request.target_node, NodeId(1));
+            assert!(matches!(
+                request.data,
+                Some(accesskit::ActionData::NumericValue(value)) if value == 0.65
+            ));
+            Ok(())
+        },
+    )
+}
