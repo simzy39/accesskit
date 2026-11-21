@@ -909,6 +909,7 @@ impl<'a> NodeRef<'a> {
                     | Role::RadioButton
                     | Role::RadioGroup
                     | Role::Slider
+                    | Role::Splitter
                     | Role::Switch
                     | Role::TreeGrid
             )
@@ -1145,6 +1146,48 @@ mod tests {
     use alloc::vec;
 
     use crate::tests::*;
+
+    fn splitter_is_read_only(explicit_read_only: bool) -> bool {
+        let mut splitter = Node::new(Role::Splitter);
+        splitter.set_numeric_value(0.5);
+        splitter.set_min_numeric_value(0.1);
+        splitter.set_max_numeric_value(0.9);
+        splitter.add_action(Action::SetValue);
+
+        if explicit_read_only {
+            splitter.set_read_only();
+        }
+
+        let update = TreeUpdate {
+            nodes: vec![
+                (NodeId(0), {
+                    let mut root = Node::new(Role::Window);
+                    root.set_children(vec![NodeId(1)]);
+                    root
+                }),
+                (NodeId(1), splitter),
+            ],
+            tree: Some(TreeInfo::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        };
+
+        let tree = crate::Tree::new(update, false);
+        let node = tree.state().node_by_id(nid(NodeId(1))).unwrap();
+
+        assert!(node.is_read_only_supported());
+        node.is_read_only()
+    }
+
+    #[test]
+    fn splitter_is_writable_by_default() {
+        assert!(!splitter_is_read_only(false));
+    }
+
+    #[test]
+    fn splitter_respects_explicit_read_only() {
+        assert!(splitter_is_read_only(true));
+    }
 
     #[test]
     fn parent_and_index() {
